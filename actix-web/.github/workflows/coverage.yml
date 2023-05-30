@@ -1,0 +1,33 @@
+# disabled because `cargo tarpaulin` currently segfaults
+
+name: Coverage
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read # to fetch code (actions/checkout)
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # job currently (1st Feb 2022) segfaults
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: { toolchain: nightly }
+
+      - name: Generate coverage file
+        run: |
+          cargo install cargo-tarpaulin --vers "^0.13"
+          cargo tarpaulin --workspace --features=rustls,openssl --out Xml --verbose
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v1
+        with: { file: cobertura.xml }

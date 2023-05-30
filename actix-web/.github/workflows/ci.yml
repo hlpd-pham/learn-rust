@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read # to fetch code (actions/checkout)
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_and_test:
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { name: Linux, os: ubuntu-latest, triple: x86_64-unknown-linux-gnu }
+          - { name: macOS, os: macos-latest, triple: x86_64-apple-darwin }
+          - { name: Windows, os: windows-latest, triple: x86_64-pc-windows-msvc }
+        version:
+          - 1.59.0 # MSRV
+          - stable
+
+    name: ${{ matrix.target.name }} / ${{ matrix.version }}
+    runs-on: ${{ matrix.target.os }}
+
+    env: {}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install OpenSSL
+        if: matrix.target.os == 'windows-latest'
+        run: choco install openssl
+      - name: Set OpenSSL dir in env
+        if: matrix.target.os == 'windows-latest'
+        run: echo 'OPENSSL_DIR=C:\Program Files\OpenSSL-Win64' | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install Rust (${{ matrix.version }})
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ matrix.version }}
+
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@cargo-hack
+
+      - name: workaround MSRV issues
+        if: matrix.version != 'stable'
+        run: |
+          cargo install cargo-edit --version=0.8.0
+          cargo add const-str@0.3 --dev -p=actix-web
+          cargo add const-str@0.3 --dev -p=awc
+
+      - name: workaround MSRV issues
+        if: matrix.version != 'stable'
+        run: |
+          cargo update -p=zstd-sys --precise=2.0.1+zstd.1.5.2
+
+      - name: check minimal
+        run: cargo ci-check-min
+
+      - name: check default
+        run: cargo ci-check-default
+
+      - name: tests
+        timeout-minutes: 60
+        run: |
+          cargo test --lib --tests -p=actix-router --all-features
+          cargo test --lib --tests -p=actix-http --all-features
+          cargo test --lib --tests -p=actix-web --features=rustls,openssl -- --skip=test_reading_deflate_encoding_large_random_rustls
+          cargo test --lib --tests -p=actix-web-codegen --all-features
+          cargo test --lib --tests -p=awc --all-features
+          cargo test --lib --tests -p=actix-http-test --all-features
+          cargo test --lib --tests -p=actix-test --all-features
+          cargo test --lib --tests -p=actix-files
+          cargo test --lib --tests -p=actix-multipart --all-features
+          cargo test --lib --tests -p=actix-web-actors --all-features
+
+      - name: Clear the cargo caches
+        run: |
+          cargo install cargo-cache --version 0.8.3 --no-default-features --features ci-autoclean
+          cargo-cache
+
+  io-uring:
+    name: io-uring tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: { toolchain: nightly }
+
+      - name: tests (io-uring)
+        timeout-minutes: 60
+        run: >
+          sudo bash -c "ulimit -Sl 512 && ulimit -Hl 512 && PATH=$PATH:/usr/share/rust/.cargo/bin && RUSTUP_TOOLCHAIN=stable cargo test --lib --tests -p=actix-files --all-features"
+
+  rustdoc:
+    name: doc tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust (nightly)
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: { toolchain: nightly }
+
+      - name: doc tests
+        run: cargo ci-doctest
+        timeout-minutes: 60
